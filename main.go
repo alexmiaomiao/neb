@@ -15,15 +15,16 @@ import (
 
 const (
         //mainnet数据库路径
-        dbpath = "/home/lzt/Documents/mygo/src/github.com/lzt/neb/data.db"
+        dbpath = "/home/lzt/Documents/mygo/src/github.com/nebulasio/go-nebulas/mainnet/data.db"
 	maxRoutine = 10000
 )
 
 //获取整个区块链上所有交易单数量
 func getTotalTXs(db *storage.RocksStorage) (uint64, error) {
         var currentH uint64
-        txChan := make(chan uint64)
+        txChan := make(chan int)
 	sema := make(chan struct{}, maxRoutine)
+	res := make(chan uint64)
         var wg sync.WaitGroup
 
         if block, err := getTailBlock(db); err != nil {
@@ -33,36 +34,40 @@ func getTotalTXs(db *storage.RocksStorage) (uint64, error) {
 		fmt.Println(currentH)
         }
 
+	wg.Add(int(currentH))
+	go func() {
+                wg.Wait()
+                close(txChan)
+        }()
+
+	go func() {
+		var total uint64
+		for num := range txChan {
+			total += uint64(num)
+		}
+		res <- total
+	}()
+
+
         for i := uint64(1); i <= currentH; i++ {
-                wg.Add(1)
 		sema <- struct{}{}
                 go func(h uint64) {
                         defer wg.Done()
 
 			b, err := getBlockByHeight(h, db)
 			if err != nil {
-				log.Println(err)
-				log.Println(h)
+				//log.Println(err)
+				//log.Println(h)
 				txChan <- 0
 			} else {
-				txChan <- uint64(len(b.Transactions()))
+				txChan <- len(b.Transactions())
 
 			}
 			<- sema
                 }(i)
         }
 
-        go func() {
-                wg.Wait()
-                close(txChan)
-        }()
-
-        var total uint64
-        for num := range txChan {
-                total += num
-        }
-
-        return total, nil
+        return  <- res, nil
 }
 
 //通过hash获取某个区块
@@ -75,7 +80,9 @@ func getBlockByHash(hash []byte, db *storage.RocksStorage) (*core.Block, error) 
                 if err := proto.Unmarshal(b, pbBlock); err != nil {
 			return nil, err
                 }
+		fmt.Println(pbBlock)
                 if err := block.FromProto(pbBlock); err != nil {
+			fmt.Println(block)
                         return nil, err
                 }
                 return block, nil
@@ -125,14 +132,14 @@ func main() {
         }
         defer db.Close()
 
-        // if block, err := getBlockByHeight(uint64(256977), db); err != nil {
-        //         log.Fatal(err)
-        // } else {
-        //         fmt.Println(block)
-        //         for _, tx := range block.Transactions() {
-        //                 fmt.Println(tx)
-        //         }
-        // }
+        if block, err := getBlockByHeight(uint64(225179), db); err != nil {
+                log.Fatal(err)
+        } else {
+                fmt.Println(block)
+                for _, tx := range block.Transactions() {
+                        fmt.Println(tx)
+                }
+        }
 
         // if num, err := getTotalTXs(db); err != nil {
         //         log.Fatal(err)
@@ -140,5 +147,5 @@ func main() {
         //         fmt.Println(num)
         // }
 
-	getTXsByDay(2018, 5, 5, db)
+	// getTXsByDay(2018, 5, 5, db)
 }
