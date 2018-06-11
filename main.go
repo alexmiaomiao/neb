@@ -100,7 +100,6 @@ func (db *Database) GetTotalTXs() (uint64, error) {
 		res <- total
 	}()
 
-
         for i := uint64(1); i <= currentH; i++ {
 		sema <- struct{}{}
                 go func(h uint64) {
@@ -140,25 +139,26 @@ func (db *Database) heightInPeriod(ts, te time.Time, hs, he uint64) (uint64, cor
 }
 
 //获取某天的全部交易单
-func (db *Database) GetTXsByDay(y,m,d int) (core.Transactions, error) {
+func (db *Database) GetTXsByDay(y,m,d int) (core.Transactions, uint64, error) {
 	ts := time.Date(y, time.Month(m), d, 0, 0, 0, 0, time.Local)
 	te := ts.Add(24*time.Hour)
 	
         block, err := db.GetTailBlock()
 	if err != nil {
-                return nil, err
+                return nil, 0, err
         }
 
 	if te.Unix() < earliestTS || ts.Unix() > block.Timestamp() {
-		return nil, fmt.Errorf("The date is not in interval")
+		return nil, 0, fmt.Errorf("The date is not in interval")
 	}
 	
 	hm, TX, err := db.heightInPeriod(ts, te, 2, block.Height())
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	TXChan := make(chan core.Transactions)
+	last := make(chan uint64, 1)
         var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -170,6 +170,7 @@ func (db *Database) GetTXsByDay(y,m,d int) (core.Transactions, error) {
 				continue
 			}
 			if block.Timestamp() > te.Unix() {
+				last <- i-1
 				break
 			}
 			TXChan <- block.Transactions()
@@ -201,7 +202,7 @@ func (db *Database) GetTXsByDay(y,m,d int) (core.Transactions, error) {
 		TX = append(TX, tx...)
 	}
 
-	return TX, nil
+	return TX, <- last, nil
 }
 
 //整理交易单
@@ -307,26 +308,37 @@ func main() {
         //         fmt.Println(num)
         // }
 
-	if txs, err := db.GetTXsByDay(2018, 6, 2); err != nil {
+	if txs, l, err := db.GetTXsByDay(2018, 6, 2); err != nil {
 		log.Fatal(err)
 	} else {
+		fmt.Printf("2018-6-2\ntotal: %d\n\n", len(txs))
 		b, c, d := ArrangeTXs(txs)
-		fmt.Println(b)
-		fmt.Println(c)
-		fmt.Println(d)
+		fmt.Printf("binary: %d\n", len(b))
+		for _, i := range b {
+			fmt.Println(i)
+		}
+		fmt.Printf("call: %d\n", len(c))
+		for _, i := range c {
+			fmt.Println(i)
+		}
+		fmt.Printf("deploy: %d\n", len(d))
+		for _, i := range d {
+			fmt.Println(i)
+		}
+		fmt.Println()
 		m := CountContractCall(c)
+		fmt.Printf("Contract\tCalled count\tLastbalance\n")
 		for k, v := range m {
-			fmt.Printf("%s\t%d\n", k, v)
+			hb, err := db.GetBalanceAtHeight(k, l)
+			if err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("%s\t%d\t%v\n", k, v, hb)
 			// cio, err := countContractInOut(k, txs)
 			// if err != nil {
 			// 	log.Fatal(err)
 			// }
 			// fmt.Println(cio)
-			hb, err := db.GetBalanceAtHeight(k, uint64(300000))
-			if err != nil {
-				log.Fatal(err)
-			}
-			fmt.Println(hb)
 		}
 	}
 }
